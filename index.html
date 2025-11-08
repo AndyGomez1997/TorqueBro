@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner de Diagnóstico OBD-II (Control de Ventilador Animado)</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1f2937">
+    <!-- Carga de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Configuración de color para modo oscuro por defecto */
+        :root {
+            --primary-color: #3b82f6;
+            /* Blue 500 */
+            --bg-color: #1f2937;
+            /* Gray 800 */
+            --text-color: #e5e7eb;
+            /* Gray 200 */
+            --card-bg: #374151;
+            /* Gray 700 */
+            --log-bg: #111827;
+            /* Gray 900 */
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Inter', sans-serif;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid #4b5563;
+            /* Gray 600 */
+        }
+
+        /* Estilo para el indicador de conexión */
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            transition: all 0.3s ease;
+        }
+
+        /* Estilo para los botones */
+        .btn-primary {
+            background-color: var(--primary-color);
+            transition: background-color 0.2s;
+        }
+
+        .btn-primary:hover {
+            background-color: #2563eb;
+            /* Blue 600 */
+        }
+
+        /* Animación de giro para el ventilador */
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .fan-icon {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            color: #4b5563;
+            /* Default gray/off color */
+            transform-origin: center;
+            transition: color 0.3s ease;
+        }
+
+        .fan-spin-slow {
+            animation: spin 1s linear infinite;
+            /* Lento */
+            color: #22c55e;
+            /* Green for RAD1 / Low Speed */
+        }
+
+        .fan-spin-fast {
+            animation: spin 0.5s linear infinite;
+            /* Rápido */
+            color: #f97316;
+            /* Orange for RAD2 / High Speed */
+        }
+
+        /* Estilo para el modal de mensaje */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.75);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+    </style>
+</head>
+
+<body class="min-h-screen p-4 md:p-8">
+
+    <!-- Modal de Mensajes Personalizados (Reemplazo de alert) -->
+    <div id="message-modal" class="modal hidden">
+        <div class="bg-gray-800 p-6 rounded-lg shadow-2xl max-w-sm w-full border border-gray-700">
+            <h3 id="modal-title" class="text-xl font-bold mb-3 text-red-400">Error de Conexión</h3>
+            <p id="modal-message" class="text-gray-300 mb-4"></p>
+            <button onclick="closeModal()"
+                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg transition">Aceptar</button>
+        </div>
+    </div>
+
+    <div class="w-full max-w-6xl mx-auto space-y-8">
+
+        <!-- Encabezado y Conexión -->
+        <header class="p-6 card rounded-xl shadow-2xl">
+            <div class="flex flex-col sm:flex-row justify-between items-center gap-4">
+                <h1 class="text-2xl sm:text-3xl font-extrabold text-white flex items-center text-center sm:text-left">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 mr-3 text-red-500" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="18" rx="2" ry="2"></rect>
+                        <line x1="8" y1="12" x2="16" y2="12"></line>
+                        <line x1="12" y1="8" x2="12" y2="16"></line>
+                    </svg>
+                    Diagnóstico OBD-II Real (ELM327)
+                </h1>
+
+                <div class="flex flex-col sm:flex-row items-center sm:space-x-4 space-y-3 sm:space-y-0 w-full sm:w-auto">
+                    <span id="connection-status-text" class="text-sm font-semibold text-center sm:text-left">Desconectado</span>
+                    <span id="status-light" class="status-indicator bg-red-500"></span>
+                    <button id="connect-btn" onclick="toggleConnection()"
+                        class="btn-primary py-2 px-4 rounded-lg font-bold shadow-md hover:shadow-lg active:scale-95 w-full sm:w-auto">
+                        Conectar ELM327
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Contenido Principal: Datos y Log -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+            <!-- Columna de Datos en Tiempo Real (PIDs) -->
+            <div class="lg:col-span-2 space-y-6">
+                <h2 class="text-xl font-semibold text-blue-400">Datos del Vehículo (Modo 01)</h2>
+
+                <div id="pid-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+                    <!-- PID Card Template -->
+                    <div id="rpm-card" class="p-4 card rounded-lg text-center shadow-lg">
+                        <p class="text-xs text-gray-400">RPM del Motor (010C)</p>
+                        <p id="rpm-value" class="text-3xl md:text-4xl font-extrabold text-yellow-400 mt-1">0</p>
+                        <p class="text-sm text-gray-400">RPM</p>
+                    </div>
+
+                    <div id="speed-card" class="p-4 card rounded-lg text-center shadow-lg">
+                        <p class="text-xs text-gray-400">Velocidad (010D)</p>
+                        <p id="speed-value" class="text-3xl md:text-4xl font-extrabold text-green-400 mt-1">0</p>
+                        <p class="text-sm text-gray-400">km/h</p>
+                    </div>
+
+                    <div id="temp-card" class="p-4 card rounded-lg text-center shadow-lg">
+                        <p class="text-xs text-gray-400">Temp. Refrigerante (0105)</p>
+                        <p id="temp-value" class="text-3xl md:text-4xl font-extrabold text-red-400 mt-1">0</p>
+                        <p class="text-sm text-gray-400">°C</p>
+                    </div>
+
+                    <div id="load-card" class="p-4 card rounded-lg text-center shadow-lg">
+                        <p class="text-xs text-gray-400">Carga del Motor (0104)</p>
+                        <p id="load-value" class="text-3xl md:text-4xl font-extrabold text-blue-400 mt-1">0</p>
+                        <p class="text-sm text-gray-400">%</p>
+                    </div>
+                </div>
+
+                <!-- Control de Actuador (Ventiladores RAD1 y RAD2) -->
+                <div class="p-6 card rounded-xl shadow-lg mt-6">
+                    <h3 class="text-xl font-semibold text-white mb-4">Control de Ventiladores del Radiador (Actuador
+                        Simulado)</h3>
+                    <p class="text-gray-400 text-sm mb-4">Controla los relés del ventilador del radiador. El ícono
+                        muestra el estado y velocidad actuales. (Comando de actuación simulado).</p>
+
+                    <div class="flex flex-col md:flex-row items-center gap-6">
+
+                        <!-- Ícono de Ventilador (Animado con SVG mejorado) -->
+                        <div id="fan-indicator-wrapper"
+                            class="p-4 bg-gray-900 rounded-full shadow-inner border border-gray-700">
+                            <svg id="fan-svg" class="fan-icon" viewBox="0 0 24 24" fill="currentColor"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <!-- Centro del ventilador -->
+                                <circle cx="12" cy="12" r="2.5" />
+                                <!-- Aspa 1 (Arriba) -->
+                                <path d="M12 5.5c-1 0-1.8 1.5-1.8 3.5V12h3.6V9c0-2-0.8-3.5-1.8-3.5z" />
+                                <!-- Aspa 2 (Derecha - rotada 90 grados) -->
+                                <path d="M18.5 12c0 1-1.5 1.8-3.5 1.8H12v-3.6h3c2 0 3.5 0.8 3.5 1.8z"
+                                    transform="rotate(90 12 12)" />
+                                <!-- Aspa 3 (Abajo - rotada 180 grados) -->
+                                <path d="M12 18.5c1 0 1.8-1.5 1.8-3.5V12h-3.6v3c0 2 0.8 3.5 1.8 3.5z"
+                                    transform="rotate(180 12 12)" />
+                                <!-- Aspa 4 (Izquierda - rotada 270 grados) -->
+                                <path d="M5.5 12c0-1 1.5-1.8 3.5-1.8H12v3.6H9c-2 0-3.5-0.8-3.5-1.8z"
+                                    transform="rotate(270 12 12)" />
+                            </svg>
+                        </div>
+
+                        <!-- Controles de Botones -->
+                        <div class="flex flex-wrap gap-3 justify-center md:justify-start w-full">
+                            <!-- Ventilador RAD1 (Baja) -->
+                            <button id="rad1-btn" onclick="setFanState('RAD1')"
+                                class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg font-bold shadow-md active:scale-95 disabled:bg-gray-500 disabled:cursor-not-allowed text-sm w-full sm:w-auto"
+                                disabled>
+                                Activar RAD1 (Baja)
+                            </button>
+
+                            <!-- Ventilador RAD2 (Alta) -->
+                            <button id="rad2-btn" onclick="setFanState('RAD2')"
+                                class="bg-orange-500 hover:bg-orange-600 text-white py-2 px-4 rounded-lg font-bold shadow-md active:scale-95 disabled:bg-gray-500 disabled:cursor-not-allowed text-sm w-full sm:w-auto"
+                                disabled>
+                                Activar RAD2 (Alta)
+                            </button>
+
+                            <!-- Apagado General -->
+                            <button id="fan-off-btn" onclick="setFanState('OFF')"
+                                class="bg-gray-600 hover:bg-gray-700 text-white py-2 px-4 rounded-lg font-bold shadow-md active:scale-95 disabled:bg-gray-500 disabled:cursor-not-allowed text-sm w-full sm:w-auto"
+                                disabled>
+                                Apagar Ventiladores
+                            </button>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- Columna de Consola ELM327 -->
+            <div class="lg:col-span-1">
+                <h2 class="text-xl font-semibold text-yellow-400 mb-3">Consola ELM327 (Live Data)</h2>
+                <div id="elm-log"
+                    class="h-72 sm:h-80 lg:h-96 overflow-y-auto p-4 rounded-xl font-mono text-xs bg-gray-900 border border-gray-700 shadow-inner">
+
+                    <p class="text-gray-500">-- Listo para conectar ELM327 por Bluetooth --</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- VARIABLES DE ESTADO BLUETOOTH Y PIDS ---
+        let isConnected = false;
+        let device = null;
+        let rxCharacteristic = null; // Característica para recibir datos
+        let txCharacteristic = null; // Característica para enviar comandos
+        let pidLoopRunning = false;
+        let currentFanState = 'OFF'; // Estado: 'OFF', 'RAD1', 'RAD2'
+
+        // Búfer para almacenar datos parciales del ELM327
+        let dataBuffer = '';
+
+        // UUIDs COMUNES para adaptadores BLE que emulan un puerto serie (Nordic UART Service - NUS)
+        const ELM_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+        const ELM_TX_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // Write
+        const ELM_RX_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // Notify
+
+        // Referencias a elementos del DOM
+        const logElement = document.getElementById('elm-log');
+        const statusLight = document.getElementById('status-light');
+        const statusText = document.getElementById('connection-status-text');
+        const connectBtn = document.getElementById('connect-btn');
+        const rad1Btn = document.getElementById('rad1-btn');
+        const rad2Btn = document.getElementById('rad2-btn');
+        const fanOffBtn = document.getElementById('fan-off-btn');
+        const fanSVG = document.getElementById('fan-svg');
+        const pidElements = {
+            rpm: document.getElementById('rpm-value'),
+            speed: document.getElementById('speed-value'),
+            temp: document.getElementById('temp-value'),
+            load: document.getElementById('load-value'),
+        };
+
+        // Lista de PIDs a solicitar secuencialmente
+        const PIDS_TO_READ = ['010C', '010D', '0105', '0104'];
+        let currentPidIndex = 0;
+
+        // --- UTILIDADES DE UI ---
+
+        function showModal(title, message, isError = true) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+            document.getElementById('modal-title').className = isError ? 'text-xl font-bold mb-3 text-red-400' : 'text-xl font-bold mb-3 text-green-400';
+            document.getElementById('message-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('message-modal').classList.add('hidden');
+        }
+
+        function logMessage(text, type = 'info') {
+            const entry = document.createElement('p');
+            const now = new Date().toLocaleTimeString();
+            let colorClass = 'text-gray-400';
+
+            if (type === 'cmd') {
+                colorClass = 'text-yellow-400';
+            } else if (type === 'rsp') {
+                colorClass = 'text-green-400';
+            } else if (type === 'error') {
+                colorClass = 'text-red-500';
+            } else if (type === 'info') {
+                colorClass = 'text-blue-400';
+            }
+
+            entry.className = colorClass;
+            entry.textContent = `[${now}] ${text}`;
+
+            if (logElement.children.length > 50) {
+                logElement.removeChild(logElement.firstChild);
+            }
+            logElement.appendChild(entry);
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function updateFanDisplay() {
+            fanSVG.classList.remove('fan-spin-slow', 'fan-spin-fast');
+            fanSVG.style.color = '#4b5563';
+
+            if (currentFanState === 'RAD1') {
+                fanSVG.classList.add('fan-spin-slow');
+                fanSVG.style.color = '#22c55e'; // Verde
+                fanSVG.title = "Ventilador RAD1 Activo (Baja Velocidad)";
+            } else if (currentFanState === 'RAD2') {
+                fanSVG.classList.add('fan-spin-fast');
+                fanSVG.style.color = '#f97316'; // Naranja
+                fanSVG.title = "Ventilador RAD2 Activo (Alta Velocidad)";
+            } else {
+                fanSVG.title = "Ventilador Inactivo";
+            }
+        }
+
+        // --- LÓGICA DE CONTROL DE ACTUADOR SIMULADA ---
+        function setFanState(state) {
+            if (!isConnected) {
+                showModal('Ventilador Inactivo', 'El scanner debe estar conectado para simular el control de actuador.', true);
+                return;
+            }
+
+            let command = '';
+            let description = '';
+
+            if (state === 'RAD1') {
+                if (currentFanState === 'RAD1') return;
+                command = '03 F0 01'; // Comando de actuación Kia/Hyundai (SIMULADO)
+                description = 'Activar Ventilador RAD1 (Baja)';
+                currentFanState = 'RAD1';
+            } else if (state === 'RAD2') {
+                if (currentFanState === 'RAD2') return;
+                command = '03 F0 02'; // Comando de actuación Kia/Hyundai (SIMULADO)
+                description = 'Activar Ventilador RAD2 (Alta)';
+                currentFanState = 'RAD2';
+            } else if (state === 'OFF') {
+                if (currentFanState === 'OFF') return;
+                command = '03 F0 00'; // Comando de actuación Kia/Hyundai (SIMULADO)
+                description = 'Apagar Ventiladores';
+                currentFanState = 'OFF';
+            } else {
+                return;
+            }
+
+            logMessage(`CMD SIMULADO: ${command} (${description})`, 'cmd');
+
+            // Simular respuesta exitosa para la UI del ventilador
+            setTimeout(() => {
+                logMessage(`RSP SIMULADA: OK -> ${description} ejecutado.`, 'rsp');
+                updateFanDisplay();
+            }, 500);
+        }
+
+
+        // --- LÓGICA DE COMUNICACIÓN ELM327 (WEB BLUETOOTH) ---
+
+        // Envía un comando al ELM327
+        async function sendCommand(command) {
+            if (txCharacteristic && isConnected) {
+                try {
+                    // ELM327 necesita un salto de línea (\r) para ejecutar el comando
+                    const data = new TextEncoder().encode(command + '\r');
+                    await txCharacteristic.writeValue(data);
+                    logMessage(`CMD: ${command}`, 'cmd');
+                } catch (error) {
+                    logMessage(`Error al enviar comando: ${error.message}`, 'error');
+                }
+            }
+        }
+
+        // Maneja los datos recibidos del ELM327
+        function handleIncomingData(event) {
+            const value = event.target.value;
+            const decoder = new TextDecoder('ascii');
+            const dataChunk = decoder.decode(value);
+
+            dataBuffer += dataChunk;
+
+            // El ELM327 finaliza la respuesta con '>' o 'NO DATA'
+            const EOL = ['>', 'NO DATA', 'SEARCHING...', 'BUS INIT: ...', 'ERROR'];
+
+            let lineEnd = -1;
+            for (const end of EOL) {
+                lineEnd = dataBuffer.indexOf(end);
+                if (lineEnd !== -1) break;
+            }
+
+            if (lineEnd !== -1) {
+                // Procesar la respuesta completa
+                let response = dataBuffer.substring(0, lineEnd + 1).trim();
+                dataBuffer = dataBuffer.substring(lineEnd + 1).trim(); // Limpiar el búfer
+
+                if (response.includes('\r')) {
+                    response = response.split('\r').pop().trim();
+                }
+
+                processElmResponse(response);
+            }
+        }
+
+        // Procesa la respuesta del ELM327 (AT o PID)
+        function processElmResponse(response) {
+            logMessage(`RSP: ${response}`, 'rsp');
+
+            // 1. Manejo de Respuestas de Inicialización
+            if (response.startsWith('ELM') || response.startsWith('OK') || response.startsWith('AT')) {
+                // Respuesta de inicialización, no requiere manejo PID
+                return;
+            }
+
+            // 2. Manejo de Respuestas de PID (Modo 01)
+            // Formato esperado: 41 <PID> <DATA>... (Ej: 41 0C 0B B8)
+            if (response.startsWith('41')) {
+                const parts = response.split(' ').filter(p => p.length > 0);
+                if (parts.length < 3) return;
+
+                const pid = parts[1];
+                const dataA = parseInt(parts[2], 16);
+                const dataB = parts.length > 3 ? parseInt(parts[3], 16) : 0;
+
+                // Actualizar la UI con los valores decodificados
+                try {
+                    switch (pid) {
+                        case '0C': // RPM
+                            // Fórmula: (A*256 + B) / 4
+                            const rpm = ((dataA * 256) + dataB) / 4;
+                            pidElements.rpm.textContent = Math.round(rpm).toString();
+                            break;
+                        case '0D': // Velocidad (km/h)
+                            // Fórmula: A
+                            const speed = dataA;
+                            pidElements.speed.textContent = speed.toString();
+                            break;
+                        case '05': // Temp. Refrigerante (°C)
+                            // Fórmula: A - 40
+                            const temp = dataA - 40;
+                            pidElements.temp.textContent = temp.toString();
+                            break;
+                        case '04': // Carga del Motor (%)
+                            // Fórmula: (A * 100) / 255
+                            const load = (dataA * 100) / 255;
+                            pidElements.load.textContent = Math.round(load).toString();
+                            break;
+                    }
+                } catch (e) {
+                    logMessage(`Error decodificando PID ${pid}: ${e.message}`, 'error');
+                }
+            }
+        }
+
+        // Bucle para enviar PIDs cíclicamente
+        async function startPidLoop() {
+            pidLoopRunning = true;
+            await initializeELM(); // Inicialización ATZ, ATE0, etc.
+
+            while (isConnected && pidLoopRunning) {
+                const pid = PIDS_TO_READ[currentPidIndex];
+                await sendCommand(pid);
+
+                // Esperar un breve momento para la respuesta antes de pasar al siguiente PID
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+                currentPidIndex = (currentPidIndex + 1) % PIDS_TO_READ.length;
+
+                // Pausa principal antes de iniciar el siguiente ciclo completo de PIDs
+                if (currentPidIndex === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 800)); // Espera de 0.8s para el siguiente escaneo completo
+                }
+            }
+        }
+
+        // Envía comandos de inicialización al ELM327
+        async function initializeELM() {
+            await sendCommand('ATZ'); // Reset
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await sendCommand('ATE0'); // Desactivar Eco
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await sendCommand('ATL0'); // Desactivar Saltos de Línea
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await sendCommand('ATS0'); // Desactivar Espacios
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await sendCommand('ATH1'); // Encabezados ON
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await sendCommand('ATSP0'); // Protocolo Auto
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            logMessage('Inicialización de ELM327 completada.', 'info');
+        }
+
+        // --- LÓGICA DE CONEXIÓN PRINCIPAL ---
+
+        async function connectBluetooth() {
+            try {
+                connectBtn.textContent = 'Buscando Dispositivo...';
+                connectBtn.disabled = true;
+
+                // Solicitar dispositivo Bluetooth
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [ELM_SERVICE_UUID] }],
+                    optionalServices: [ELM_SERVICE_UUID]
+                });
+
+                logMessage(`Dispositivo seleccionado: ${device.name}`, 'info');
+
+                // Escuchar el evento de desconexión
+                device.addEventListener('gattserverdisconnected', onDisconnected);
+
+                // Conectar al servidor GATT
+                const server = await device.gatt.connect();
+                logMessage('Conectado al servidor GATT.', 'info');
+
+                // Obtener el servicio UART
+                const service = await server.getPrimaryService(ELM_SERVICE_UUID);
+                logMessage('Servicio UART (ELM) encontrado.', 'info');
+
+                // Obtener las características de Transmisión (TX) y Recepción (RX)
+                txCharacteristic = await service.getCharacteristic(ELM_TX_UUID); // Para ESCRIBIR comandos
+                rxCharacteristic = await service.getCharacteristic(ELM_RX_UUID); // Para RECIBIR respuestas
+
+                // Habilitar notificaciones para recibir datos del RX
+                await rxCharacteristic.startNotifications();
+                rxCharacteristic.addEventListener('characteristicvaluechanged', handleIncomingData);
+                logMessage('Notificaciones de RX habilitadas. Listo para comandos.', 'info');
+
+                // Configuración de UI para estado Conectado
+                isConnected = true;
+                statusLight.classList.remove('bg-red-500');
+                statusLight.classList.add('bg-green-500', 'animate-pulse');
+                statusText.textContent = `Conectado a ${device.name}`;
+                connectBtn.textContent = 'Desconectar';
+                connectBtn.disabled = false;
+                connectBtn.classList.remove('btn-primary');
+                connectBtn.classList.add('bg-red-500', 'hover:bg-red-600');
+
+                rad1Btn.disabled = false;
+                rad2Btn.disabled = false;
+                fanOffBtn.disabled = false;
+
+                // Iniciar el bucle de lectura de PIDs
+                startPidLoop();
+
+            } catch (error) {
+                logMessage(`Fallo de conexión o acceso: ${error.message}`, 'error');
+                showModal('Error de Conexión', `No se pudo conectar al ELM327. Asegúrate de que el dispositivo esté encendido, emparejado o que tu navegador soporte la API Web Bluetooth. Detalle: ${error.message}`, true);
+                // Resetear UI
+                toggleConnection(true);
+            }
+        }
+
+        function onDisconnected(event) {
+            logMessage(`Dispositivo ${event.target.name} desconectado.`, 'error');
+            toggleConnection(true);
+        }
+
+        function disconnectBluetooth() {
+            if (device && device.gatt && device.gatt.connected) {
+                // Si la conexión GATT está activa, la desconectamos. 
+                // Esto disparará el evento 'gattserverdisconnected' que llama a onDisconnected.
+                device.gatt.disconnect();
+            }
+            // Si no está conectado, simplemente retornamos. La función toggleConnection 
+            // superior se encarga de la limpieza de la interfaz de usuario.
+        }
+
+        function toggleConnection(forceDisconnect = false) {
+            if (isConnected || forceDisconnect) {
+                // Desconexión
+                pidLoopRunning = false;
+                isConnected = false;
+                currentFanState = 'OFF';
+
+                // Limpieza de recursos y UI
+                if (rxCharacteristic) {
+                    rxCharacteristic.removeEventListener('characteristicvaluechanged', handleIncomingData);
+                }
+                disconnectBluetooth();
+
+                statusLight.classList.remove('bg-green-500', 'animate-pulse');
+                statusLight.classList.add('bg-red-500');
+                statusText.textContent = 'Desconectado';
+                connectBtn.textContent = 'Conectar ELM327';
+                connectBtn.disabled = false;
+                connectBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                connectBtn.classList.add('btn-primary');
+
+                rad1Btn.disabled = true;
+                rad2Btn.disabled = true;
+                fanOffBtn.disabled = true;
+                updateFanDisplay();
+
+                Object.values(pidElements).forEach(el => el.textContent = '0');
+
+                logMessage('Sesión cerrada. Desconectado del ELM327.', 'info');
+            } else {
+                // Conexión
+                connectBluetooth();
+            }
+        }
+
+        // Inicializar
+        window.onload = () => {
+            logMessage('Sistema de Diagnóstico OBD-II cargado. Listo para Web Bluetooth.', 'info');
+            if (!navigator.bluetooth) {
+                showModal('Web Bluetooth NO Soportado', 'Tu navegador no soporta la API Web Bluetooth necesaria para conectar un ELM327 real.', true);
+                connectBtn.disabled = true;
+                connectBtn.textContent = 'Bluetooth No Soportado';
+            }
+            updateFanDisplay();
+
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('./service-worker.js')
+                    .then(() => logMessage('Service Worker registrado correctamente para modo offline.', 'info'))
+                    .catch(err => logMessage(`Error registrando Service Worker: ${err.message}`, 'error'));
+            } else {
+                logMessage('Service Worker no soportado en este navegador.', 'error');
+            }
+        }
+
+</script>
+</body>
+
+</html>
