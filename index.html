@@ -135,8 +135,10 @@
                     Diagnóstico OBD-II Real (ELM327)
                 </h1>
 
-                <div class="flex flex-col sm:flex-row items-center sm:space-x-4 space-y-3 sm:space-y-0 w-full sm:w-auto">
-                    <span id="connection-status-text" class="text-sm font-semibold text-center sm:text-left">Desconectado</span>
+                <div
+                    class="flex flex-col sm:flex-row items-center sm:space-x-4 space-y-3 sm:space-y-0 w-full sm:w-auto">
+                    <span id="connection-status-text"
+                        class="text-sm font-semibold text-center sm:text-left">Desconectado</span>
                     <span id="status-light" class="status-indicator bg-red-500"></span>
                     <button id="connect-btn" onclick="toggleConnection()"
                         class="btn-primary py-2 px-4 rounded-lg font-bold shadow-md hover:shadow-lg active:scale-95 w-full sm:w-auto">
@@ -527,7 +529,7 @@
 
                 // Solicitar dispositivo Bluetooth
                 device = await navigator.bluetooth.requestDevice({
-                    filters: [{ services: [ELM_SERVICE_UUID] }],
+                    acceptAllDevices: true,
                     optionalServices: [ELM_SERVICE_UUID]
                 });
 
@@ -647,7 +649,7 @@
             }
         }
 
-</script>
+    </script>
 </body>
 
 </html>
